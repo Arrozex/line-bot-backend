@@ -16,15 +16,14 @@ app = Flask(__name__)
 # ==========================================
 
 # 資料庫連線 (請確認這裡是你剛剛測試成功的 Supabase 網址)
-connection_string = "postgresql://postgres:jhmc8653eee7@db.abhwicdwbxjdlfholdnb.supabase.co:5432/postgres"
+connection_string = os.environ.get('DATABASE_URL')
+line_bot_api = LineBotApi(os.environ.get('LINE_CHANNEL_ACCESS_TOKEN'))
+handler = WebhookHandler(os.environ.get('LINE_CHANNEL_SECRET'))
+
 app.config['SQLALCHEMY_DATABASE_URI'] = connection_string
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
-
-# LINE Bot 設定 (請填入你的 Token 與 Secret)
-line_bot_api = LineBotApi('FuWgutKbXWdLQQkQox1SZ1+dbNMRh7cQgBoeF+sAfq32UK/Djcs9QksAA4U/zDHLQNSbleXfp4R6v5A6ed/bG+TesYLBN1ij8x3eOpRDc2Lt4IklhbGLCziWs8zMFElvhKnEGHuODeADfNJ7n+0NiwdB04t89/1O/w1cDnyilFU=')
-handler = WebhookHandler('d508be9c1ed17e4ba44374d15ccaa3e1')
 
 # ==========================================
 # 2. 資料表模型 (跟之前一樣)
@@ -130,4 +129,5 @@ def handle_message(event):
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
+
     app.run(host='0.0.0.0', port=port)
