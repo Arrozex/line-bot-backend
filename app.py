@@ -15,8 +15,11 @@ app = Flask(__name__)
 # 1. 設定區 (資料庫 + LINE Bot)
 # ==========================================
 
-# 資料庫連線 (請確認這裡是你剛剛測試成功的 Supabase 網址)
+# 資料庫連線
 connection_string = os.environ.get('DATABASE_URL')
+if connection_string and connection_string.startswith("postgres://"):
+    connection_string = connection_string.replace("postgres://", "postgresql://", 1)
+
 line_bot_api = LineBotApi(os.environ.get('LINE_CHANNEL_ACCESS_TOKEN'))
 handler = WebhookHandler(os.environ.get('LINE_CHANNEL_SECRET'))
 
@@ -26,12 +29,12 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
 # ==========================================
-# 2. 資料表模型 (跟之前一樣)
+# 2. 資料表模型
 # ==========================================
 class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
-    line_user_id = db.Column(db.String(50), unique=True) # 綁定後會有值
+    line_user_id = db.Column(db.String(50), unique=True)
     email = db.Column(db.String(100), unique=True, nullable=False)
     name = db.Column(db.String(50))
     enrollments = db.relationship('Enrollment', backref='user', lazy=True)
@@ -50,7 +53,14 @@ class Enrollment(db.Model):
     check_in_time = db.Column(db.DateTime, nullable=True)
 
 # ==========================================
-# 3. LINE Webhook 入口 (LINE 伺服器會呼叫這裡)
+# 3. 健康檢查端點
+# ==========================================
+@app.route("/", methods=['GET'])
+def health_check():
+    return 'LINE Bot is running! 🤖', 200
+
+# ==========================================
+# 4. LINE Webhook 入口
 # ==========================================
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -65,46 +75,40 @@ def callback():
     return 'OK'
 
 # ==========================================
-# 4. 訊息處理邏輯 (機器人的大腦)
+# 5. 訊息處理邏輯
 # ==========================================
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    msg = event.message.text.strip() # 使用者傳來的訊息
-    line_id = event.source.user_id   # 使用者的 LINE ID
+    msg = event.message.text.strip()
+    line_id = event.source.user_id
     
     reply_text = ""
 
-    # --- 邏輯 A: 如果使用者輸入的是 Email ---
-    # (簡單判斷是否包含 @ 和 .)
+    # --- 邏輯 A: Email 綁定 ---
     if "@" in msg and "." in msg:
-        # 去資料庫找這個 Email
         user = User.query.filter_by(email=msg).first()
         
         if user:
-            # 找到人！進行綁定 (把 LINE ID 存進去)
             user.line_user_id = line_id
             db.session.commit()
             
-            # 查詢他修了什麼課
             course_list = []
             for enrollment in user.enrollments:
                 course_list.append(enrollment.course.course_name)
             
-            courses_str = "\n".join(course_list)
+            courses_str = "\n".join(course_list) if course_list else "目前沒有報名課程"
             reply_text = f"哈囉 {user.name}！\n綁定成功 ✅\n\n您目前報名的課程有：\n{courses_str}"
         else:
             reply_text = "找不到這個 Email 耶 😅\n請確認您輸入的是報名時填寫的信箱。"
 
-    # --- 邏輯 B: 如果使用者輸入「簽到」 ---
+    # --- 邏輯 B: 簽到 ---
     elif msg == "簽到":
-        # 先確認這個 LINE ID 是誰
         user = User.query.filter_by(line_user_id=line_id).first()
         
         if user:
-            # 這裡示範「只要有報名就全部簽到」，未來可以改成「只簽到當天的課」
             updated_count = 0
             for enrollment in user.enrollments:
-                if enrollment.check_in_time is None: # 如果還沒簽過
+                if enrollment.check_in_time is None:
                     enrollment.check_in_time = datetime.now()
                     updated_count += 1
             
@@ -121,7 +125,7 @@ def handle_message(event):
     else:
         reply_text = "請輸入您的 Gmail 來查詢課程與綁定帳號。\n或者輸入「簽到」來進行課程簽到。"
 
-    # 回傳訊息給使用者
+    # 回傳訊息
     line_bot_api.reply_message(
         event.reply_token,
         TextSendMessage(text=reply_text)
@@ -129,5 +133,4 @@ def handle_message(event):
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
-
     app.run(host='0.0.0.0', port=port)
