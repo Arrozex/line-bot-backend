@@ -2,7 +2,7 @@ import os
 import re
 from flask import Flask, request, abort
 from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 # LINE Bot 相關套件
 from linebot import LineBotApi, WebhookHandler
@@ -40,6 +40,9 @@ class User(db.Model):
     identity = db.Column(db.Text)  # 新增：身份/科系
     status = db.Column(db.Text, default='free')  # 新增：狀態機
     created_at = db.Column(db.DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    
+    # 新增關聯，讓 user.enrollments 可用
+    enrollments = db.relationship('Enrollment', backref='user', lazy=True, foreign_keys='Enrollment.user_email', primaryjoin='User.email == Enrollment.user_email')
 
 class Course(db.Model):
     __tablename__ = 'courses'
@@ -158,13 +161,13 @@ def handle_message(event):
         if msg == "是的，我是":
             user.status = 'wait_email'  # 通過驗證，下一步問 Email
             db.session.commit()
-            reply_text = "太好了！🎉\n\n接下來請輸入您的 **Email** 以進行綁定：\n(我們將會寄送課程資訊給您)"
+            reply_text = "太好了！🎉\n\n接下來請輸入您的 「Email」 以進行綁定：\n(我們將會寄送課程資訊給您)"
         
         elif msg == "我只是路過的":
             # 重置狀態，刪除暫存使用者
             db.session.delete(user) 
             db.session.commit()
-            reply_text = "沒問題！您可以自由瀏覽「公開課程」資訊，但無法進行報名與簽到喔。😊"
+            reply_text = "沒問題！您依舊可以透過「近期課程」指令了解最新課程資訊哦。😊"
         
         else:
             # 使用者沒按按鈕，自己亂打字
@@ -186,16 +189,16 @@ def handle_message(event):
                 user.email = msg  # 更新真正的 Email
                 user.status = 'wait_name'
                 db.session.commit()
-                reply_text = "收到！📧\n接下來，請輸入您的 **真實姓名**："
+                reply_text = "收到！📧\n接下來，請輸入您於報名系統填入的 「真實姓名」："
         else:
-            reply_text = "Email 格式看起來不太對喔，請再檢查一下 🙏"
+            reply_text = "Email 格式看起來不太對喔，請再檢查一下"
 
     # --- 狀態 3: 等待姓名階段 ---
     elif user and user.status == 'wait_name':
         user.name = msg
         user.status = 'wait_dept'
         db.session.commit()
-        reply_text = f"你好，{msg}！\n最後一步，請輸入您的 **服務單位** 或 **科系**："
+        reply_text = f"你好，{msg}！\n最後一步，請輸入您的 「服務單位」 或 「科系」："
 
     # --- 狀態 4: 等待科系/單位階段 ---
     elif user and user.status == 'wait_dept':
@@ -204,15 +207,86 @@ def handle_message(event):
         db.session.commit()
         reply_text = (
             "🎉 恭喜！綁定完成！\n\n"
-            "您可以隨時輸入「今日課表」或「近期課程」來查詢資訊。"
+            "您可以輸入指令，開始使用以下功能：1.「近期課表」2.「已選課程」3.「我的資料」"
         )
+
+    # ==========================================
+    # 第三層：功能指令 (已完成綁定的使用者)
+    # ==========================================
+    
+    # --- 近期課程 (所有人都可以查看) ---
+    elif msg == "近期課程":
+        today = (datetime.utcnow() + timedelta(hours=8)).date()
+
+        courses = Course.query.filter(
+            (Course.end_date >= today) | (Course.end_date == None)
+        ).order_by(Course.weekday, Course.start_time).all()
+
+        if not courses:
+            reply_text = "目前沒有即將進行的課程喔！😅"
+        else:
+            reply_text = "📋 近期課程一覽：\n----------------------\n"
+            days_map = ["一", "二", "三", "四", "五", "六", "日"]
+            
+            for c in courses:
+                day_str = days_map[c.weekday] if c.weekday is not None else "待定"
+                time_str = c.start_time.strftime('%H:%M') if c.start_time else "待定"
+                
+                # 顯示課程名稱與時間
+                reply_text += f"🔹 {c.course_name}\n   (週{day_str} {time_str})\n"
+                
+                if c.end_date:
+                    reply_text += f"   ~ 至 {c.end_date} 截止\n"
+
+            google_cal_link = "https://calendar.google.com/..."
+            reply_text += f"\n📅 查看完整行事曆：\n{google_cal_link}"
 
     # --- 預設情況: 其他訊息 ---
     else:
         if not user:
             reply_text = "歡迎！請先輸入「綁定資料」來註冊您的帳號。"
+
+        # --- 我的資料 ---
+        elif msg == "我的資料":
+            reply_text = (
+                f"您的綁定資料：\n\n"
+                f"姓名: {user.name or '未設定'}\n"
+                f"Email: {user.email}\n"
+                f"身分: {user.identity or '未設定'}"
+            )
+
+        # --- 已選課程 ---
+        elif msg == "已選課程":
+            enrollments = Enrollment.query.filter_by(user_email=user.email).all()
+            
+            if not enrollments:
+                reply_text = "您目前還沒有選修任何課程喔！📚"
+            else:
+                all_courses = [e.course for e in enrollments]
+                all_courses.sort(key=lambda x: (x.weekday or 999, x.start_time or datetime.min.time()))
+
+                days_map = ["一", "二", "三", "四", "五", "六", "日"]
+                reply_text = "🗓️ 您的課表：\n"
+                
+                current_weekday_index = -1 
+                
+                for c in all_courses:
+                    # 如果換了一天，就印出分隔線和星期幾
+                    if c.weekday != current_weekday_index:
+                        weekday_str = days_map[c.weekday] if c.weekday is not None else "待定"
+                        reply_text += f"\n【週{weekday_str}】\n"
+                        current_weekday_index = c.weekday
+                    
+                    time_str = c.start_time.strftime('%H:%M') if c.start_time else "待定"
+                    reply_text += f"   {time_str} {c.course_name}\n"
+                    
+        # --- 幫助 ---
+        elif msg == "幫助":
+            reply_text = "指令清單：1.「近期課程」2.「已選課程」3.「我的資料」"
+        
+        # --- 其他未知指令 ---
         else:
-            reply_text = "您可以輸入「今日課表」或「近期課程」來查詢資訊，或輸入「簽到」進行課程簽到。"
+            reply_text = "您可以輸入「幫助」查看可使用的指令哦！"
 
     # 回傳訊息
     line_bot_api.reply_message(
