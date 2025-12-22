@@ -299,10 +299,10 @@ def handle_message(event):
                 time_str = c.start_time.strftime('%H:%M') if c.start_time else "待定"
                 
                 # 顯示課程名稱與時間
-                reply_text += f"🔹 {c.course_name}\n   (週{day_str} {time_str})\n"
+                reply_text += f"🔹{c.course_date} {c.course_name}\n   (週{day_str} {time_str})\n"
                 
                 if c.end_date:
-                    reply_text += f"   ~ 至 {c.end_date} 截止\n"
+                    reply_text += f"   ~ 報名至 {c.end_date} 截止\n"
 
             google_cal_link = "https://calendar.google.com/..."
             reply_text += f"\n📅 查看完整行事曆：\n{google_cal_link}"
@@ -352,7 +352,7 @@ def handle_message(event):
                     # 如果換了一天，就印出分隔線和星期幾
                     if c.weekday != current_weekday_index:
                         weekday_str = days_map[c.weekday] if c.weekday is not None else "待定"
-                        reply_text += f"\n【週{weekday_str}】\n"
+                        reply_text += f"\n {c.course_date}【週{weekday_str}】\n"
                         current_weekday_index = c.weekday
                     
                     time_str = c.start_time.strftime('%H:%M') if c.start_time else "待定"
@@ -375,3 +375,4 @@ def handle_message(event):
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
