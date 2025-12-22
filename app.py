@@ -38,7 +38,7 @@ class User(db.Model):
     email = db.Column(db.Text, unique=True, nullable=False)
     name = db.Column(db.Text)
     identity = db.Column(db.Text)  # 新增：身份/科系
-    status = db.Column(db.Text, default='free')  # 新增：狀態機
+    status = db.Column(db.Text, default='free')  # 狀態機: free, check_identity, wait_email, wait_name, wait_dept, edit_select, edit_email, edit_name, edit_identity
     created_at = db.Column(db.DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     
     # 新增關聯，讓 user.enrollments 可用
@@ -207,8 +207,74 @@ def handle_message(event):
         db.session.commit()
         reply_text = (
             "🎉 恭喜！綁定完成！\n\n"
-            "您可以輸入指令，開始使用以下功能：1.「近期課表」2.「已選課程」3.「我的資料」"
+            "您可以輸入指令，開始使用以下功能：1.「近期課程」2.「已選課程」3.「我的資料」"
         )
+
+    # ==========================================
+    # 修改資料流程
+    # ==========================================
+    
+    # --- 狀態 5: 選擇要修改的項目 ---
+    elif user and user.status == 'edit_select':
+        if msg == "修改姓名":
+            user.status = 'edit_name'
+            db.session.commit()
+            reply_text = f"您目前的姓名是：{user.name or '未設定'}\n\n請輸入新的姓名："
+        
+        elif msg == "修改Email":
+            user.status = 'edit_email'
+            db.session.commit()
+            reply_text = f"您目前的 Email 是：{user.email}\n\n請輸入新的 Email："
+        
+        elif msg == "修改身分":
+            user.status = 'edit_identity'
+            db.session.commit()
+            reply_text = f"您目前的身分是：{user.identity or '未設定'}\n\n請輸入新的服務單位或科系："
+        
+        elif msg == "取消修改":
+            user.status = 'free'
+            db.session.commit()
+            reply_text = "已取消修改。"
+        
+        else:
+            send_quick_reply(
+                event.reply_token,
+                "請點選下方的按鈕來選擇要修改的項目：",
+                ["修改姓名", "修改Email", "修改身分", "取消修改"]
+            )
+            return
+    
+    # --- 狀態 6: 修改姓名 ---
+    elif user and user.status == 'edit_name':
+        old_name = user.name
+        user.name = msg
+        user.status = 'free'
+        db.session.commit()
+        reply_text = f"✅ 姓名已更新！\n\n舊姓名: {old_name or '未設定'}\n新姓名: {msg}"
+    
+    # --- 狀態 7: 修改 Email ---
+    elif user and user.status == 'edit_email':
+        if "@" in msg and "." in msg:
+            # 檢查新 Email 是否已被其他人使用
+            check_email = User.query.filter_by(email=msg).first()
+            if check_email and check_email.id != user.id:
+                reply_text = "這個 Email 已經有人使用囉！請換一個。"
+            else:
+                old_email = user.email
+                user.email = msg
+                user.status = 'free'
+                db.session.commit()
+                reply_text = f"✅ Email 已更新！\n\n舊 Email: {old_email}\n新 Email: {msg}\n\n⚠️ 注意：您的選課紀錄已自動同步至新 Email。"
+        else:
+            reply_text = "Email 格式看起來不太對喔，請再檢查一下。"
+    
+    # --- 狀態 8: 修改身分 ---
+    elif user and user.status == 'edit_identity':
+        old_identity = user.identity
+        user.identity = msg
+        user.status = 'free'
+        db.session.commit()
+        reply_text = f"✅ 身分已更新！\n\n舊身分: {old_identity or '未設定'}\n新身分: {msg}"
 
     # ==========================================
     # 第三層：功能指令 (已完成綁定的使用者)
@@ -252,8 +318,20 @@ def handle_message(event):
                 f"您的綁定資料：\n\n"
                 f"姓名: {user.name or '未設定'}\n"
                 f"Email: {user.email}\n"
-                f"身分: {user.identity or '未設定'}"
+                f"身分: {user.identity or '未設定'}\n\n"
+                f"若要修改資料，請輸入「修改資料」，並點選想要修改的資料。"
             )
+        
+        # --- 修改資料 ---
+        elif msg == "修改資料":
+            user.status = 'edit_select'
+            db.session.commit()
+            send_quick_reply(
+                event.reply_token,
+                "請選擇您要修改的項目：",
+                ["修改姓名", "修改Email", "修改身分", "取消修改"]
+            )
+            return
 
         # --- 已選課程 ---
         elif msg == "已選課程":
